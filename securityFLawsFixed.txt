@@ -1,0 +1,155 @@
+Faceclaw security review and Android credential protection
+Checkout reviewed: main, 2026-10-16
+
+Scope
+-----
+This review checked the current checkout against five previously observed
+concerns. The first focused change protects Android credentials and backup
+data. Bridge transport security and assistant capability controls remain for
+later changes. No firmware, pairing, phone installation, live app service,
+commit, or push operation was performed. The pre-existing untracked AGENTS.md
+was left untouched.
+
+Findings from source review
+---------------------------
+1. Plaintext Android credential settings -- CONFIRMED, HIGH, FIXED LOCALLY.
+   Before this change, FaceclawSettings stored string settings in an ordinary
+   SharedPreferences file named faceclaw_settings. Credential-bearing keys
+   included assistant.bridgeToken; the ElevenLabs, OpenAI, Soniox, Anthropic,
+   Roam, Nightscout, and EvenHub tokens; Terminal connection strings and their
+   draft; T3 Code environments and their pairing draft; and a legacy EvenHub
+   password key. Relevant source: App_Resources/Android/src/main/java/com/
+   faceclaw/app/FaceclawSettings.kt; app/ui/dashboard-settings.ts (around
+   lines 919-974 and 1021-1144); app/apps/evenhub/credentials.ts (around line
+   21); app/apps/terminal/connections.ts (around lines 13 and 90); and
+   app/apps/t3code/t3-environments.ts (around lines 9 and 35).
+   Exploitation requires access to app-private data, an accessible backup, or
+   a full settings export. Encryption does not protect against a compromised
+   running app or a device attacker who can use the app's credentials.
+
+2. Android backup exposure -- CONFIRMED, HIGH, FIXED LOCALLY.
+   App_Resources/Android/src/main/AndroidManifest.xml previously set
+   android:allowBackup="true" without explicit exclusions. Exploitation
+   requires access to cloud backup or device-transfer data. This update sets
+   allowBackup=false and adds both legacy backup and Android 12+ cloud/device
+   transfer exclusion rules. Existing backups made before this update cannot
+   be recalled by the app.
+
+3. Plaintext external assistant WebSocket -- CONFIRMED CONDITIONAL WEAKNESS,
+   HIGH, NOT CHANGED. app/assistant/bridge-client.ts around line 158 builds a
+   ws:// URL. The external backend must be configured and an attacker must be
+   on the transport path to intercept or alter traffic. The manifest describes
+   a Tailscale deployment, but actual VPN routing was not verified. The next
+   focused change should define an authenticated wss:// policy and any narrow
+   VPN-only exception.
+
+4. Proactive assistant actions enabled by default -- CONFIRMED, MEDIUM, NOT
+   CHANGED. app/ui/dashboard-settings.ts around lines 930-935 defaults
+   assistant.allowProactive to true. A configured external bridge or agent is
+   required. app/assistant/mcp-server.ts around lines 90-101 checks the switch
+   and rate limit; app/assistant/tool-registry.ts around line 211 permits only
+   tools marked proactive. This is a deliberate capability with a permissive
+   default. A later change should default it off and review per-tool grants.
+
+5. Sensitive assistant capabilities and config exports -- INTENTIONAL
+   PRIVILEGED SURFACE, HIGH IMPACT IF ITS AUTHORIZED CHANNEL IS COMPROMISED.
+   app/assistant/system-tools.ts registers calendar and notification tools;
+   app/apps/terminal/terminal-app.worker.ts around line 226 registers terminal
+   send_input. During an authorized conversation, assistant tool access can
+   affect or reveal sensitive phone and homelab data. The adb settings receiver
+   in App_Resources/Android/src/main/AndroidManifest.xml is guarded by the
+   android.permission.DUMP permission; no ordinary-app bypass was confirmed.
+   Its old raw export/import path could expose or reintroduce plaintext
+   credentials. This update restricts that path to ordinary settings. Review
+   assistant tool grants and authorization in a separate focused change.
+
+What changed locally
+--------------------
+- native/kotlin/shared/src/commonMain/kotlin/com/faceclaw/app/settings/
+  FaceclawSecretKeys.kt explicitly lists credential-bearing settings. Ordinary
+  UI preferences and the public Mapbox pk token are not encrypted blindly.
+- App_Resources/Android/src/main/java/com/faceclaw/app/
+  FaceclawSecretSettings.kt uses Android Keystore-backed AES-256-GCM. The app's
+  minimum Android API is 24; the platform Keystore APIs used here start at 23.
+  Each write uses a generated IV and authenticates the preference name.
+- native/kotlin/shared/src/commonMain/kotlin/com/faceclaw/app/settings/
+  SecretMigration.kt commits ciphertext, reads and decrypts it for verification,
+  then removes plaintext. On an interrupted cleanup, verified ciphertext is
+  authoritative and cleanup is retried. Missing/invalid keys or corrupt data
+  produce an error; there is no plaintext fallback. A failed write poisons
+  credential access in that process until restart so an uncommitted in-memory
+  SharedPreferences value is not mistaken for durable ciphertext.
+- FaceclawSettings.kt routes only inventoried secret keys through encryption,
+  migrates existing values on initialization, and retains the SettingsChangeHub
+  used for main-thread and worker notifications.
+- App_Resources/Android/src/main/AndroidManifest.xml and the two new XML files
+  under App_Resources/Android/src/main/res/xml/ disable automatic backup and
+  exclude app data from cloud backup and device transfer.
+- FaceclawSettingsPortReceiver.kt exports only ordinary settings and rejects
+  credential or internal encrypted keys on import. scripts/pull_config.sh and
+  scripts/push_config.sh use that receiver on both debug and release builds.
+  Transferred credentials must be re-entered. README.md, scripts/ios-config.md,
+  and notes/android-credential-storage.md document this behavior.
+- tests/kotlin/src/commonTest/kotlin/com/faceclaw/app/
+  SecretMigrationTest.kt covers migration, failed writes, interrupted cleanup,
+  unavailable keys, corrupt readback, and the secret-key inventory.
+
+Validation and limits
+---------------------
+Passed: TypeScript typecheck, direct oxlint, XML parsing for the Android
+manifest and backup rules, and git diff --check.
+
+Not completed: the new Kotlin tests and the documented Android build. WSL on
+this machine has no /bin/bash and Java is unavailable. The broad Node test
+suite fails on Windows tooling assumptions, including a path-separator
+assertion and missing python3. These failures do not establish whether the new
+Android Kotlin code compiles. There was no app installation, device transfer,
+backup restore, Bluetooth test, or physical device verification.
+
+Locked dependency installation reported 21 advisories. Their exploitability
+and relationship to this change were not assessed; no dependency was upgraded.
+
+Remaining security scope
+------------------------
+Older full settings exports, manual run-as copies, old .bak files, and backups
+made before this change may still contain plaintext secrets. Owners should
+handle and remove those copies securely when no longer needed. Keystore key
+loss requires deliberate recovery and credential re-entry; the app does not
+silently create a replacement key over unreadable encrypted entries.
+
+iOS behavior is unchanged. app/native/settings-store.ios.ts uses NSUserDefaults;
+iOS Keychain storage, backup behavior, and migration require a separate review.
+EvenHub app-local storage uses NativeScript ApplicationSettings and can hold
+arbitrary third-party app values; it is outside this named credential inventory.
+No unauthorized remote tool execution or ordinary-app access to the adb
+settings receiver was demonstrated by static review.
+
+Exact device tests before relying on this change
+-------------------------------------------------
+1. On a disposable debug installation, seed old plaintext credential entries;
+   upgrade in place without uninstalling. Verify each credential still works,
+   plaintext entries are gone, and only versioned ciphertext entries remain.
+   Do not print credential values into logs or shared reports.
+2. Change a protected setting from the main isolate and a worker. Confirm each
+   sees the new value and receives its usual settings-change notification after
+   restart as well as during one process lifetime.
+3. Interrupt migration after ciphertext commit but before plaintext cleanup.
+   Restart, verify the ciphertext value wins, and confirm cleanup completes.
+4. Inject a failed ciphertext commit, corrupt ciphertext, and simulate a missing
+   or invalidated Keystore key. Confirm explicit failure, no plaintext fallback,
+   and recovery only after deliberate removal/re-entry of affected credentials.
+5. Exercise Android cloud backup and device-to-device transfer on supported
+   test devices. Verify app settings and exported files are excluded, including
+   on Android 12+ where allowBackup=false alone may not stop transfer.
+6. Exercise adb export/import on a test device. Verify exported XML contains no
+   inventoried secret or internal ciphertext keys; a file containing either
+   kind of key is rejected; ordinary settings import; existing encrypted
+   credentials remain usable.
+
+Platform references
+-------------------
+Android backup and transfer rules:
+https://developer.android.com/identity/data/autobackup
+https://developer.android.com/about/versions/12/behavior-changes-12
+Android Keystore key configuration:
+https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec

@@ -32,6 +32,8 @@ Push detects JSON or XML by content and supports strings, booleans and numbers.
 Malformed input, unsupported values and files over 2 MiB fail before restarting
 the app. Push **merges supplied keys**, preserving omitted settings (including
 phone-specific pairing). To clear a value, supply its empty/default value.
+Current Android exports contain ordinary settings only; Android credentials
+are not transferred to iOS by this path.
 
 Transfers use `devicectl` app-container access. The app consumes a uniquely
 identified request at bootstrap, before loading settings getters and workers;

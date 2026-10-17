@@ -24,11 +24,16 @@ import android.os.Looper
 class FaceclawSettings private constructor(context: Context) {
     private val prefs: SharedPreferences = context.applicationContext
         .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val secrets = FaceclawSecretSettings(prefs)
+    init { secrets.migrateExisting() }
     private val hub = SettingsChangeHub(object : SettingsStorage {
-        override fun getString(key: String?, defaultValue: String?): String? = prefs.getString(key, defaultValue)
+        override fun getString(key: String?, defaultValue: String?): String? =
+            if (key != null && FaceclawSecretKeys.contains(key)) secrets.get(key, defaultValue)
+            else prefs.getString(key, defaultValue)
 
         override fun putString(key: String?, value: String?) {
-            prefs.edit().putString(key, value).apply()
+            if (key != null && FaceclawSecretKeys.contains(key)) secrets.put(key, value)
+            else prefs.edit().putString(key, value).apply()
         }
 
         override fun getBoolean(key: String?, defaultValue: Boolean): Boolean = prefs.getBoolean(key, defaultValue)

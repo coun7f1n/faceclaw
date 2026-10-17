@@ -53,8 +53,8 @@ port into your computer, authorize access on the phone, and run
 
 Note that if you have installed a signed release build, you will have to
 uninstall it before installing a customized version. Use scripts/pull_config.sh
-to export a copy of your configuration first, and scripts/push_config.sh to
-import it into the new version.
+to export ordinary settings first, and scripts/push_config.sh to import them
+into the new version. Credentials are excluded and must be re-entered.
 
 
 ## Features
@@ -129,10 +129,9 @@ Setup lives in the faceclaw-agent-bridge repository's README. It covers
 both the OpenClaw-host side (plugin install and configuration) and the
 phone side, which can be configured either by hand in Settings > Assistant
 on the glasses, or over adb using scripts/pull_config.sh and
-scripts/push_config.sh from this repo; the instructions are written so an
-OpenClaw agent with the phone plugged into its host can perform the whole
-setup itself. Note that a pulled settings file contains your API keys, so
-treat it as a secret (the default output path is gitignored here).
+scripts/push_config.sh from this repo. Current Android exports omit API keys and other credentials;
+enter those on the phone after importing ordinary settings. Exports from older
+builds may still contain secrets, so treat those files accordingly.
 
 ## EvenHub App Notes
 
